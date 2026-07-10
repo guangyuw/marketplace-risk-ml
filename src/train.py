@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import joblib
@@ -12,6 +13,16 @@ import mlflow.xgboost
 import numpy as np
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import brier_score_loss
+
+
+def _git_commit_hash() -> str:
+    """Return current HEAD commit hash, or 'untracked' if not in a git repo."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return "untracked"
 
 from src.config import (
     ARTIFACT_DIR,
@@ -44,6 +55,7 @@ def train_pipeline(
     x_train, y_train, x_test, y_test, freq_maps = prepare_datasets(train_df, test_df, TARGET)
 
     with mlflow.start_run(run_name="marketplace-risk-baseline") as run:
+        mlflow.set_tag("git_commit", _git_commit_hash())
         mlflow.log_params(
             {
                 "train_rows": len(train_df),
