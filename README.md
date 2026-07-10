@@ -52,12 +52,15 @@ marketplace-risk-ml/
 ```bash
 cd marketplace-risk-ml
 python -m venv .venv && source .venv/bin/activate
+
+# production dependencies
 pip install -r requirements.txt
 
 # 1) Train + log to MLflow + save artifacts
 python -m src.train
 
-# 2) Run tests
+# 2) Run tests (requires dev dependencies)
+pip install -r requirements-dev.txt
 pytest -q
 
 # 3) Start API
