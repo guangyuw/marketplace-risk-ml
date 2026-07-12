@@ -27,6 +27,16 @@ def _git_commit_hash() -> str:
     except Exception:
         return "untracked"
 
+
+def _running_on_databricks() -> bool:
+    """True when executing inside a Databricks notebook / job."""
+    return bool(
+        os.environ.get("DATABRICKS_RUNTIME_VERSION")
+        or os.environ.get("DATABRICKS_ROOT_VIRTUAL_ENV")
+        or str(PROJECT_ROOT).startswith("/Workspace")
+        or Path("/databricks").exists()
+    )
+
 from src.config import (
     ARTIFACT_DIR,
     FALSE_CLEAR_TOLERANCE,
@@ -57,11 +67,16 @@ def train_pipeline(
         When None (default), a local synthetic dataset is generated — useful
         for offline development without a Snowflake connection.
     """
-    artifact_dir = artifact_dir or ARTIFACT_DIR
+    on_dbx = _running_on_databricks()
+    # Workspace Git folders are often read-only for SQLite; keep artifacts on local disk.
+    if artifact_dir is None:
+        artifact_dir = Path("/tmp/marketplace-risk-artifacts") if on_dbx else ARTIFACT_DIR
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    # Local: sqlite tracking UI. Databricks: keep workspace-managed MLflow (do not override).
-    if not os.environ.get("DATABRICKS_RUNTIME_VERSION"):
+    # Local: sqlite tracking UI. Databricks: managed MLflow (never point at Workspace sqlite).
+    if on_dbx:
+        mlflow.set_tracking_uri("databricks")
+    else:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
 
