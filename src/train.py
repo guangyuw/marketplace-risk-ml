@@ -312,11 +312,10 @@ def train_pipeline(
         signature_input = x_train.head(5).copy()
         signature_output = gbm.predict_proba(signature_input)[:, 1]
         signature = infer_signature(signature_input, signature_output)
-        # Log as sklearn flavor (XGBClassifier is sklearn API). On Databricks UC this
-        # reliably persists signature; xgboost flavor sometimes drops it.
-        # Do NOT call set_signature / get_model_info while the run is still open —
-        # Databricks often fails to download the just-uploaded MLmodel file.
-        model_info = mlflow.sklearn.log_model(
+        # Use xgboost flavor (not sklearn) — Databricks skops blocks XGBClassifier
+        # inside sklearn.log_model unless skops_trusted_types is set.
+        # Do NOT call set_signature / get_model_info while the run is still open.
+        model_info = mlflow.xgboost.log_model(
             gbm,
             artifact_path="xgb_model",
             signature=signature,
