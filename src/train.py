@@ -17,23 +17,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss
 
 
-class _PlattCalibrated:
-    """Platt-scaling wrapper around a pre-fitted classifier.
-
-    Fits a logistic sigmoid (Platt, 1999) on a held-out calibration window so
-    that predicted probabilities are better aligned with observed frequencies.
-    Interface matches sklearn: .predict_proba(X) returns shape (n, 2).
-    """
-
-    def __init__(self, base_model, platt: LogisticRegression) -> None:
-        self.base_model = base_model
-        self.platt = platt
-
-    def predict_proba(self, X) -> np.ndarray:
-        raw = self.base_model.predict_proba(X)[:, 1].reshape(-1, 1)
-        return self.platt.predict_proba(raw)
-
-
 def _git_commit_hash() -> str:
     """Return current HEAD commit hash, or 'untracked' if not in a git repo."""
     try:
@@ -54,7 +37,7 @@ from src.config import (
 )
 from src.data import generate_synthetic_transactions, temporal_three_way_split
 from src.features import build_features, prepare_datasets
-from src.model import classification_metrics, train_logistic_regression, train_xgboost
+from src.model import PlattCalibrated, classification_metrics, train_logistic_regression, train_xgboost
 from src.monitoring import choose_threshold_by_tolerance, psi
 
 
@@ -131,7 +114,7 @@ def train_pipeline(
         p_calib_raw = gbm.predict_proba(x_calib)[:, 1].reshape(-1, 1)
         platt = LogisticRegression(C=1e10, solver="lbfgs", max_iter=200)
         platt.fit(p_calib_raw, y_calib)
-        calibrated = _PlattCalibrated(gbm, platt)
+        calibrated = PlattCalibrated(gbm, platt)
 
         p_gbm = calibrated.predict_proba(x_test)[:, 1]
         brier_cal = brier_score_loss(y_test, p_gbm)
