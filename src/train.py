@@ -39,6 +39,7 @@ def _git_commit_hash() -> str:
     Handles:
     - normal local repos
     - Databricks Git folders where ``.git`` is a gitfile pointing at a real gitdir
+    - Databricks cases with no usable ``.git`` via a stamped ``GIT_COMMIT`` file
     """
     try:
         return subprocess.check_output(
@@ -54,14 +55,14 @@ def _git_commit_hash() -> str:
             # Databricks / worktree style: `.git` contains `gitdir: /path/to/real/git`
             line = git_path.read_text().strip()
             if not line.startswith("gitdir:"):
-                return "untracked"
+                raise FileNotFoundError("unexpected gitfile format")
             git_dir = Path(line.split(":", 1)[1].strip())
             if not git_dir.is_absolute():
                 git_dir = (PROJECT_ROOT / git_dir).resolve()
         elif git_path.is_dir():
             git_dir = git_path
         else:
-            return "untracked"
+            raise FileNotFoundError("no .git")
 
         head = (git_dir / "HEAD").read_text().strip()
         if head.startswith("ref:"):
@@ -69,7 +70,6 @@ def _git_commit_hash() -> str:
             ref_file = git_dir / ref
             if ref_file.exists():
                 return ref_file.read_text().strip()
-            # packed-refs fallback
             packed = git_dir / "packed-refs"
             if packed.exists():
                 for line in packed.read_text().splitlines():
@@ -78,10 +78,16 @@ def _git_commit_hash() -> str:
                     sha, name = line.split(" ", 1)
                     if name.strip() == ref:
                         return sha.strip()
-            return "untracked"
+            raise FileNotFoundError(f"missing ref {ref}")
         return head
     except Exception:
-        return "untracked"
+        pass
+
+    # Last resort for Databricks Git folders that hide .git from notebooks.
+    stamped = PROJECT_ROOT / "GIT_COMMIT"
+    if stamped.exists():
+        return stamped.read_text().strip() or "untracked"
+    return "untracked"
 
 
 def _running_on_databricks() -> bool:
