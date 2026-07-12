@@ -69,3 +69,31 @@ def temporal_train_test_split(
     train = ordered[ordered[date_col] <= cutoff].copy()
     test = ordered[ordered[date_col] > cutoff].copy()
     return train, test
+
+
+def temporal_three_way_split(
+    df: pd.DataFrame,
+    date_col: str = "event_date",
+    train_q: float = 0.6,
+    calib_q: float = 0.8,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Temporal 60/20/20 split: train → calibration → test.
+
+    All three windows are strictly time-ordered with no overlap:
+      - train  : [0%,  60%) — fit the model
+      - calib  : [60%, 80%) — fit the probability calibrator (Platt scaling)
+      - test   : [80%, 100%] — held-out evaluation only
+
+    Using a separate calib window prevents the calibrator from seeing
+    training data (which would over-fit the sigmoid) and keeps the test
+    set truly unseen.
+    """
+    ordered = df.sort_values(date_col).reset_index(drop=True)
+    cutoff_train = ordered[date_col].quantile(train_q)
+    cutoff_calib = ordered[date_col].quantile(calib_q)
+    train = ordered[ordered[date_col] <= cutoff_train].copy()
+    calib = ordered[
+        (ordered[date_col] > cutoff_train) & (ordered[date_col] <= cutoff_calib)
+    ].copy()
+    test = ordered[ordered[date_col] > cutoff_calib].copy()
+    return train, calib, test
