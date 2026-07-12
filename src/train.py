@@ -77,9 +77,16 @@ def train_pipeline(
     # Local: sqlite tracking UI. Databricks: managed MLflow (never point at Workspace sqlite).
     if on_dbx:
         mlflow.set_tracking_uri("databricks")
+        # Databricks requires absolute workspace paths for experiment names.
+        if str(PROJECT_ROOT).startswith("/Workspace/Users/"):
+            user_folder = str(PROJECT_ROOT).split("/")[3]  # email under /Workspace/Users/
+            experiment_name = f"/Users/{user_folder}/{MLFLOW_EXPERIMENT}"
+        else:
+            experiment_name = f"/Shared/{MLFLOW_EXPERIMENT}"
     else:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(MLFLOW_EXPERIMENT)
+        experiment_name = MLFLOW_EXPERIMENT
+    mlflow.set_experiment(experiment_name)
 
     # ── 1. Data: strict temporal 60 / 20 / 20 split ──────────────────────────
     # train  [0%–60%]  → fit XGBoost
