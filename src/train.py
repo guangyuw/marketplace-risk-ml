@@ -312,14 +312,17 @@ def train_pipeline(
         signature_input = x_train.head(5).copy()
         signature_output = gbm.predict_proba(signature_input)[:, 1]
         signature = infer_signature(signature_input, signature_output)
-        # Use xgboost flavor (not sklearn) — Databricks skops blocks XGBClassifier
-        # inside sklearn.log_model unless skops_trusted_types is set.
+        # XGBClassifier is sklearn-API; Databricks skops blocks it unless trusted.
         # Do NOT call set_signature / get_model_info while the run is still open.
-        model_info = mlflow.xgboost.log_model(
+        model_info = mlflow.sklearn.log_model(
             gbm,
             artifact_path="xgb_model",
             signature=signature,
             input_example=signature_input,
+            skops_trusted_types=[
+                "xgboost.core.Booster",
+                "xgboost.sklearn.XGBClassifier",
+            ],
             registered_model_name=REGISTERED_MODEL_NAME if register_model else None,
         )
         print(f"xgb_model logged: {model_info.model_uri}")
