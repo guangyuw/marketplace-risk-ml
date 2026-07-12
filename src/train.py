@@ -36,25 +36,50 @@ from src.monitoring import choose_threshold_by_tolerance, psi
 def _git_commit_hash() -> str:
     """Return current HEAD commit hash, or 'untracked' if not in a git repo.
 
-    Always runs git from PROJECT_ROOT so Databricks Git-folder checkouts resolve.
-    Falls back to reading .git files when the git binary is unavailable.
+    Handles:
+    - normal local repos
+    - Databricks Git folders where ``.git`` is a gitfile pointing at a real gitdir
     """
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=PROJECT_ROOT,
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"],
             stderr=subprocess.DEVNULL,
         ).decode().strip()
     except Exception:
         pass
 
     try:
-        git_dir = PROJECT_ROOT / ".git"
+        git_path = PROJECT_ROOT / ".git"
+        if git_path.is_file():
+            # Databricks / worktree style: `.git` contains `gitdir: /path/to/real/git`
+            line = git_path.read_text().strip()
+            if not line.startswith("gitdir:"):
+                return "untracked"
+            git_dir = Path(line.split(":", 1)[1].strip())
+            if not git_dir.is_absolute():
+                git_dir = (PROJECT_ROOT / git_dir).resolve()
+        elif git_path.is_dir():
+            git_dir = git_path
+        else:
+            return "untracked"
+
         head = (git_dir / "HEAD").read_text().strip()
         if head.startswith("ref:"):
             ref = head.split(" ", 1)[1].strip()
-            return (git_dir / ref).read_text().strip()
-        return head  # detached HEAD stores the hash directly
+            ref_file = git_dir / ref
+            if ref_file.exists():
+                return ref_file.read_text().strip()
+            # packed-refs fallback
+            packed = git_dir / "packed-refs"
+            if packed.exists():
+                for line in packed.read_text().splitlines():
+                    if line.startswith("#") or " " not in line:
+                        continue
+                    sha, name = line.split(" ", 1)
+                    if name.strip() == ref:
+                        return sha.strip()
+            return "untracked"
+        return head
     except Exception:
         return "untracked"
 
@@ -121,7 +146,9 @@ def train_pipeline(
     y_calib = calib_df[TARGET].values
 
     with mlflow.start_run(run_name="marketplace-risk-baseline") as run:
-        mlflow.set_tag("git_commit", _git_commit_hash())
+        commit = _git_commit_hash()
+        mlflow.set_tag("git_commit", commit)
+        print(f"git_commit     : {commit}")
         mlflow.log_params(
             {
                 "train_rows": len(train_df),
