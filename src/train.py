@@ -306,9 +306,19 @@ def train_pipeline(
         mlflow.log_artifact(str(meta_path))
         # Log raw XGBoost to MLflow registry (Databricks Model Serving uses this).
         # The calibrated wrapper lives in model.joblib and is used by serve.py.
+        # Unity Catalog requires an explicit signature (input + output types).
+        from mlflow.models.signature import infer_signature
+
+        signature_input = x_train.head(5)
+        signature = infer_signature(
+            signature_input,
+            gbm.predict_proba(signature_input)[:, 1],
+        )
         mlflow.xgboost.log_model(
             gbm,
             artifact_path="xgb_model",
+            signature=signature,
+            input_example=signature_input,
             registered_model_name=REGISTERED_MODEL_NAME if register_model else None,
         )
 
