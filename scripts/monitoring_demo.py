@@ -1,50 +1,91 @@
 #!/usr/bin/env python3
-"""Monitoring demo: threshold selection, PSI drift, and transaction routing."""
+"""Post-deployment monitoring demo.
+
+Mirrors what a production monitoring job would do on a schedule:
+  1. Load the model bundle that is currently in production
+  2. Score a batch of incoming transactions
+  3. Compare score and feature distributions against the launch-time baseline (PSI)
+  4. Show the routing breakdown and what action each PSI level implies
+
+Run:
+    python scripts/monitoring_demo.py
+"""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
+import joblib
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import FALSE_CLEAR_TOLERANCE, TARGET
-from src.data import generate_synthetic_transactions, temporal_train_test_split
-from src.features import prepare_datasets
-from src.model import train_xgboost
-from src.monitoring import choose_threshold_by_tolerance, psi, route_transactions
+from src.config import TARGET
+from src.data import generate_synthetic_transactions
+from src.features import build_features
+from src.monitoring import route_transactions, psi
+
+BUNDLE_PATH = Path(__file__).resolve().parents[1] / "artifacts" / "model.joblib"
 
 
 def main() -> None:
-    df = generate_synthetic_transactions()
-    train_df, test_df = temporal_train_test_split(df)
-    x_train, y_train, x_test, y_test, _freq_maps = prepare_datasets(
-        train_df, test_df, TARGET
-    )
+    # ── 1. Load the production model bundle ──────────────────────────────────
+    if not BUNDLE_PATH.exists():
+        print(f"Model bundle not found at {BUNDLE_PATH}")
+        print("Run  python -m src.train  first.")
+        sys.exit(1)
 
-    model = train_xgboost(x_train, y_train)
-    p_train = model.predict_proba(x_train)[:, 1]
-    p_test = model.predict_proba(x_test)[:, 1]
+    bundle = joblib.load(BUNDLE_PATH)
+    model             = bundle["model"]
+    freq_maps         = bundle["freq_maps"]
+    threshold         = bundle["threshold"]
+    feature_cols      = bundle["feature_columns"]
+    baseline_scores   = bundle["baseline_scores"]    # test-set scores at launch time
+    baseline_features = bundle["baseline_features"]  # test-set features at launch time
 
-    # 1) business threshold
-    t, table = choose_threshold_by_tolerance(
-        y_test, p_test, tolerance=FALSE_CLEAR_TOLERANCE
-    )
-    print("threshold =", t)
-    print(table.head())
+    print(f"Loaded  : {BUNDLE_PATH}")
+    print(f"Deployed threshold: {threshold}")
+    print()
 
-    # 2) score PSI: train vs test (proxy for post-deploy traffic)
-    print("score PSI =", round(psi(p_train, p_test), 4))
+    # ── 2. Simulate a batch of current transactions ───────────────────────────
+    # In production: read today's transactions from the database or request log.
+    current_df = generate_synthetic_transactions(n=5_000)
+    x_current  = build_features(current_df, freq_maps)[feature_cols]
 
-    # 3) feature PSI
+    # ── 3. Score with the production model ───────────────────────────────────
+    current_scores = model.predict_proba(x_current)[:, 1]
+
+    # ── 4. PSI drift check ────────────────────────────────────────────────────
+    # Baseline = test-set scores from training time (out-of-sample at launch).
+    # Current  = scores on today's traffic.
+    score_psi = psi(baseline_scores, current_scores)
+    print(f"Score PSI = {score_psi:.4f}", end="  →  ")
+    if score_psi < 0.1:
+        print("stable, no action needed")
+    elif score_psi < 0.25:
+        print("moderate drift — investigate which features are shifting")
+    else:
+        print("HIGH drift — schedule retraining")
+    print()
+
+    print("Feature PSI  (launch baseline → current traffic):")
     for col in ["log_price", "seller_prior_dispute_rate", "buyer_age"]:
-        print(col, "PSI =", round(psi(x_train[col].values, x_test[col].values), 4))
+        if col in baseline_features.columns and col in x_current.columns:
+            val = psi(baseline_features[col].values, x_current[col].values)
+            action = "  ← investigate" if val > 0.1 else ""
+            print(f"  {col:35s} {val:.4f}{action}")
+    print()
 
-    # 4) routing: auto / manual / audit
-    routes = route_transactions(p_test, threshold=t, audit_fraction=0.02)
-    print(pd.Series(routes).value_counts(normalize=True).round(4))
+    # ── 5. Routing breakdown with the deployed threshold ─────────────────────
+    routes = route_transactions(current_scores, threshold=threshold, audit_fraction=0.02)
+    print(f"Routing breakdown  (threshold={threshold}):")
+    print(pd.Series(routes).value_counts(normalize=True).round(4).to_string())
+    print()
+    print("Actions by PSI level:")
+    print("  < 0.10  no action")
+    print("  0.10–0.25  check feature PSI, verify data pipeline")
+    print("  > 0.25  retrain, update bundle, redeploy")
 
 
 if __name__ == "__main__":
