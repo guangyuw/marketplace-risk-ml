@@ -33,26 +33,60 @@ from src.model import PlattCalibrated, classification_metrics, train_logistic_re
 from src.monitoring import choose_threshold_by_tolerance, psi
 
 
-def _git_commit_hash() -> str:
-    """Return current HEAD commit hash, or 'untracked' if not in a git repo.
-
-    Handles:
-    - normal local repos
-    - Databricks Git folders where ``.git`` is a gitfile pointing at a real gitdir
-    - Databricks cases with no usable ``.git`` via a stamped ``GIT_COMMIT`` file
-    """
+def _git_commit_from_databricks() -> str | None:
+    """Read HEAD from a Databricks Git folder via the Repos / Workspace API."""
     try:
-        return subprocess.check_output(
-            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"],
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
+        from databricks.sdk import WorkspaceClient
+    except ImportError:
+        return None
+
+    w = WorkspaceClient()
+    root = str(PROJECT_ROOT.resolve())
+    workspace_paths: list[str] = []
+    path = PROJECT_ROOT.resolve()
+    while str(path).startswith("/Workspace"):
+        workspace_paths.append(str(path))
+        if path.parent == path:
+            break
+        path = path.parent
+
+    for candidate in workspace_paths:
+        try:
+            status = w.workspace.get_status(candidate)
+            object_type = getattr(status.object_type, "value", status.object_type)
+            if str(object_type).upper() != "REPO" or status.object_id is None:
+                continue
+            repo = w.repos.get(int(status.object_id))
+            if repo.head_commit_id:
+                return repo.head_commit_id
+        except Exception:
+            continue
+
+    try:
+        prefix = "/".join(root.split("/")[:4])  # /Workspace/Users/{email}
+        best_match: str | None = None
+        best_len = -1
+        for repo in w.repos.list(path_prefix=prefix):
+            if not repo.path or not repo.head_commit_id:
+                continue
+            repo_path = repo.path.rstrip("/")
+            if root == repo_path or root.startswith(repo_path + "/"):
+                if len(repo_path) > best_len:
+                    best_match = repo.head_commit_id
+                    best_len = len(repo_path)
+        if best_match:
+            return best_match
     except Exception:
         pass
 
+    return None
+
+
+def _git_commit_from_gitdir() -> str | None:
+    """Parse HEAD from a local .git directory or gitfile (worktree style)."""
     try:
         git_path = PROJECT_ROOT / ".git"
         if git_path.is_file():
-            # Databricks / worktree style: `.git` contains `gitdir: /path/to/real/git`
             line = git_path.read_text().strip()
             if not line.startswith("gitdir:"):
                 raise FileNotFoundError("unexpected gitfile format")
@@ -81,12 +115,28 @@ def _git_commit_hash() -> str:
             raise FileNotFoundError(f"missing ref {ref}")
         return head
     except Exception:
+        return None
+
+
+def _git_commit_hash() -> str:
+    """Return current HEAD commit hash, or 'untracked' if unavailable."""
+    if _running_on_databricks():
+        dbx_commit = _git_commit_from_databricks()
+        if dbx_commit:
+            return dbx_commit
+
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
         pass
 
-    # Last resort for Databricks Git folders that hide .git from notebooks.
-    stamped = PROJECT_ROOT / "GIT_COMMIT"
-    if stamped.exists():
-        return stamped.read_text().strip() or "untracked"
+    gitdir_commit = _git_commit_from_gitdir()
+    if gitdir_commit:
+        return gitdir_commit
+
     return "untracked"
 
 
