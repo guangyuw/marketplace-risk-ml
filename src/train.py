@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -59,7 +60,9 @@ def train_pipeline(
     artifact_dir = artifact_dir or ARTIFACT_DIR
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    # Local: sqlite tracking UI. Databricks: keep workspace-managed MLflow (do not override).
+    if not os.environ.get("DATABRICKS_RUNTIME_VERSION"):
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
 
     # ── 1. Data: strict temporal 60 / 20 / 20 split ──────────────────────────
@@ -154,6 +157,11 @@ def train_pipeline(
             "freq_maps": freq_maps,
             "threshold": threshold,
             "feature_columns": list(x_train.columns),
+            # Baseline distributions for post-deployment PSI monitoring.
+            # Using test-set scores (out-of-sample) as the reference — these
+            # represent what the model looks like on unseen data at launch time.
+            "baseline_scores": p_gbm,
+            "baseline_features": x_test,
             "metadata": {
                 "model_type": "xgboost+platt",
                 "run_id": run.info.run_id,
