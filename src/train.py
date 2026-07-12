@@ -34,11 +34,27 @@ from src.monitoring import choose_threshold_by_tolerance, psi
 
 
 def _git_commit_hash() -> str:
-    """Return current HEAD commit hash, or 'untracked' if not in a git repo."""
+    """Return current HEAD commit hash, or 'untracked' if not in a git repo.
+
+    Always runs git from PROJECT_ROOT so Databricks Git-folder checkouts resolve.
+    Falls back to reading .git files when the git binary is unavailable.
+    """
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+            ["git", "rev-parse", "HEAD"],
+            cwd=PROJECT_ROOT,
+            stderr=subprocess.DEVNULL,
         ).decode().strip()
+    except Exception:
+        pass
+
+    try:
+        git_dir = PROJECT_ROOT / ".git"
+        head = (git_dir / "HEAD").read_text().strip()
+        if head.startswith("ref:"):
+            ref = head.split(" ", 1)[1].strip()
+            return (git_dir / ref).read_text().strip()
+        return head  # detached HEAD stores the hash directly
     except Exception:
         return "untracked"
 
