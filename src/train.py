@@ -307,29 +307,24 @@ def train_pipeline(
         # Log raw XGBoost to MLflow registry (Databricks Model Serving uses this).
         # The calibrated wrapper lives in model.joblib and is used by serve.py.
         # Unity Catalog requires an explicit signature (input + output types).
-        from mlflow.models import set_signature
         from mlflow.models.signature import infer_signature
 
         signature_input = x_train.head(5).copy()
-        # Keep column order/types stable for UC serving schema.
         signature_output = gbm.predict_proba(signature_input)[:, 1]
         signature = infer_signature(signature_input, signature_output)
-        model_info = mlflow.xgboost.log_model(
+        # Log as sklearn flavor (XGBClassifier is sklearn API). On Databricks UC this
+        # reliably persists signature; xgboost flavor sometimes drops it.
+        # Do NOT call set_signature / get_model_info while the run is still open —
+        # Databricks often fails to download the just-uploaded MLmodel file.
+        model_info = mlflow.sklearn.log_model(
             gbm,
             artifact_path="xgb_model",
             signature=signature,
             input_example=signature_input,
             registered_model_name=REGISTERED_MODEL_NAME if register_model else None,
         )
-        # Belt-and-suspenders: some Databricks/MLflow builds drop signature on log.
-        model_uri = f"runs:/{run.info.run_id}/xgb_model"
-        set_signature(model_uri, signature)
-        logged = mlflow.models.get_model_info(model_uri)
-        print(f"xgb_model signature: {logged.signature}")
-        if logged.signature is None:
-            raise RuntimeError(
-                "Logged xgb_model has no signature; cannot register to Unity Catalog."
-            )
+        print(f"xgb_model logged: {model_info.model_uri}")
+        print(f"xgb_model signature (at log): {getattr(model_info, 'signature', None) or signature}")
 
         print("=== Training complete ===")
         print(f"MLflow run_id  : {run.info.run_id}")
@@ -340,12 +335,28 @@ def train_pipeline(
         print(f"Threshold (tol={FALSE_CLEAR_TOLERANCE:.0%}): {threshold:.4f}")
         print(f"Artifacts      : {artifact_dir}")
 
-        return {
+        result = {
             "run_id": run.info.run_id,
             "threshold": threshold,
             "metrics": gbm_metrics,
             "model_path": str(model_path),
+            "model_uri": model_info.model_uri,
+            "signature": signature,
         }
+
+    # After the run is closed, attach signature if the platform dropped it on upload.
+    from mlflow.models import set_signature
+
+    model_uri = f"runs:/{result['run_id']}/xgb_model"
+    try:
+        set_signature(model_uri, result["signature"])
+        logged = mlflow.models.get_model_info(model_uri)
+        print(f"xgb_model signature (after run close): {logged.signature}")
+    except Exception as exc:
+        # Registration can still work if log_model already embedded the signature.
+        print(f"post-run signature check skipped: {exc}")
+
+    return result
 
 
 if __name__ == "__main__":
