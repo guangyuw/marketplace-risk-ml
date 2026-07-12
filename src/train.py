@@ -17,6 +17,21 @@ from sklearn.calibration import calibration_curve
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss
 
+from src.config import (
+    ARTIFACT_DIR,
+    FALSE_CLEAR_TOLERANCE,
+    MLFLOW_EXPERIMENT,
+    MLFLOW_TRACKING_URI,
+    PROJECT_ROOT,
+    RANDOM_STATE,
+    REGISTERED_MODEL_NAME,
+    TARGET,
+)
+from src.data import generate_synthetic_transactions, temporal_three_way_split
+from src.features import build_features, prepare_datasets
+from src.model import PlattCalibrated, classification_metrics, train_logistic_regression, train_xgboost
+from src.monitoring import choose_threshold_by_tolerance, psi
+
 
 def _git_commit_hash() -> str:
     """Return current HEAD commit hash, or 'untracked' if not in a git repo."""
@@ -36,20 +51,6 @@ def _running_on_databricks() -> bool:
         or str(PROJECT_ROOT).startswith("/Workspace")
         or Path("/databricks").exists()
     )
-
-from src.config import (
-    ARTIFACT_DIR,
-    FALSE_CLEAR_TOLERANCE,
-    MLFLOW_EXPERIMENT,
-    MLFLOW_TRACKING_URI,
-    RANDOM_STATE,
-    REGISTERED_MODEL_NAME,
-    TARGET,
-)
-from src.data import generate_synthetic_transactions, temporal_three_way_split
-from src.features import build_features, prepare_datasets
-from src.model import PlattCalibrated, classification_metrics, train_logistic_regression, train_xgboost
-from src.monitoring import choose_threshold_by_tolerance, psi
 
 
 def train_pipeline(
