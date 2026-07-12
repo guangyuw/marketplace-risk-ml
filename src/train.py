@@ -75,17 +75,19 @@ def train_pipeline(
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     # Local: sqlite tracking UI. Databricks: managed MLflow (never point at Workspace sqlite).
-    if on_dbx:
+    tracking_uri = mlflow.get_tracking_uri()
+    if on_dbx or str(tracking_uri).startswith("databricks"):
         mlflow.set_tracking_uri("databricks")
         # Databricks requires absolute workspace paths for experiment names.
         if str(PROJECT_ROOT).startswith("/Workspace/Users/"):
             user_folder = str(PROJECT_ROOT).split("/")[3]  # email under /Workspace/Users/
             experiment_name = f"/Users/{user_folder}/{MLFLOW_EXPERIMENT}"
         else:
-            experiment_name = f"/Shared/{MLFLOW_EXPERIMENT}"
+            experiment_name = f"/Users/zjugeo@outlook.com/{MLFLOW_EXPERIMENT}"
     else:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         experiment_name = MLFLOW_EXPERIMENT
+    print(f"MLflow tracking={mlflow.get_tracking_uri()}  experiment={experiment_name}")
     mlflow.set_experiment(experiment_name)
 
     # ── 1. Data: strict temporal 60 / 20 / 20 split ──────────────────────────
