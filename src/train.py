@@ -10,8 +10,6 @@ from pathlib import Path
 import joblib
 import matplotlib.pyplot as plt
 import mlflow
-import mlflow.sklearn
-import mlflow.xgboost
 import numpy as np
 from sklearn.calibration import calibration_curve
 from sklearn.linear_model import LogisticRegression
@@ -28,6 +26,7 @@ from src.config import (
     TARGET,
 )
 from src.data import generate_synthetic_transactions, temporal_three_way_split
+from src.databricks_pyfunc import MarketplaceRiskScorer, make_raw_input_example
 from src.features import build_features, prepare_datasets
 from src.model import PlattCalibrated, classification_metrics, train_logistic_regression, train_xgboost
 from src.monitoring import choose_threshold_by_tolerance, psi
@@ -304,29 +303,51 @@ def train_pipeline(
 
         mlflow.log_artifact(str(model_path))
         mlflow.log_artifact(str(meta_path))
-        # Log raw XGBoost to MLflow registry (Databricks Model Serving uses this).
-        # The calibrated wrapper lives in model.joblib and is used by serve.py.
-        # Unity Catalog requires an explicit signature (input + output types).
+
+        # ── 8. Databricks Serving: pyfunc with same path as FastAPI ───────────
+        # Raw fields → features → Platt-calibrated risk_score → route.
+        # Do NOT register raw XGB alone — Serving would call predict() → 0/1.
         from mlflow.models.signature import infer_signature
 
-        signature_input = x_train.head(5).copy()
-        signature_output = gbm.predict_proba(signature_input)[:, 1]
+        serving_payload = {
+            "base_model": gbm,
+            "platt": platt,
+            "freq_maps": freq_maps,
+            "threshold": threshold,
+            "feature_columns": list(x_train.columns),
+        }
+        serving_payload_path = artifact_dir / "serving_payload.joblib"
+        joblib.dump(serving_payload, serving_payload_path)
+
+        signature_input = make_raw_input_example(3)
+        scorer = MarketplaceRiskScorer()
+        # Soft-load for signature inference (same artifact layout as log_model).
+        class _Ctx:
+            artifacts = {"serving_payload": str(serving_payload_path)}
+
+        scorer.load_context(_Ctx())
+        signature_output = scorer.predict(_Ctx(), signature_input)
         signature = infer_signature(signature_input, signature_output)
-        # XGBClassifier is sklearn-API; Databricks skops blocks it unless trusted.
-        # Do NOT call set_signature / get_model_info while the run is still open.
-        model_info = mlflow.sklearn.log_model(
-            gbm,
-            artifact_path="xgb_model",
+
+        model_info = mlflow.pyfunc.log_model(
+            artifact_path="risk_scorer",
+            python_model=str(Path(__file__).resolve().parent / "databricks_pyfunc.py"),
+            artifacts={"serving_payload": str(serving_payload_path)},
             signature=signature,
             input_example=signature_input,
-            skops_trusted_types=[
-                "xgboost.core.Booster",
-                "xgboost.sklearn.XGBClassifier",
+            pip_requirements=[
+                f"mlflow=={mlflow.__version__}",
+                "numpy>=1.24",
+                "pandas>=2.0",
+                "scikit-learn>=1.3",
+                "xgboost>=2.0",
+                "joblib>=1.3",
             ],
             registered_model_name=REGISTERED_MODEL_NAME if register_model else None,
         )
-        print(f"xgb_model logged: {model_info.model_uri}")
-        print(f"xgb_model signature (at log): {getattr(model_info, 'signature', None) or signature}")
+        print(f"risk_scorer logged: {model_info.model_uri}")
+        print(f"risk_scorer signature: {signature}")
+        print(f"serving example output:\n{signature_output}")
 
         print("=== Training complete ===")
         print(f"MLflow run_id  : {run.info.run_id}")
@@ -343,17 +364,18 @@ def train_pipeline(
             "metrics": gbm_metrics,
             "model_path": str(model_path),
             "model_uri": model_info.model_uri,
+            "artifact_path": "risk_scorer",
             "signature": signature,
         }
 
     # After the run is closed, attach signature if the platform dropped it on upload.
     from mlflow.models import set_signature
 
-    model_uri = f"runs:/{result['run_id']}/xgb_model"
+    model_uri = f"runs:/{result['run_id']}/{result.get('artifact_path', 'risk_scorer')}"
     try:
         set_signature(model_uri, result["signature"])
         logged = mlflow.models.get_model_info(model_uri)
-        print(f"xgb_model signature (after run close): {logged.signature}")
+        print(f"risk_scorer signature (after run close): {logged.signature}")
     except Exception as exc:
         # Registration can still work if log_model already embedded the signature.
         print(f"post-run signature check skipped: {exc}")
