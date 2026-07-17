@@ -14,6 +14,9 @@ def generate_synthetic_transactions(n: int = 40_000, seed: int = RANDOM_STATE) -
     Schema mirrors a secondary ticket marketplace:
     - long-tail prices, high-cardinality categories, imbalanced risk label
     - historical seller/buyer features computed only from past events (no leakage)
+    - bimodal seller quality (verified-style low-risk sellers vs. a risky minority)
+      plus a price x seller-risk interaction, matching how risk actually concentrates
+      in resale marketplaces rather than varying smoothly across all sellers
     """
     rng = np.random.default_rng(seed)
 
@@ -28,6 +31,17 @@ def generate_synthetic_transactions(n: int = 40_000, seed: int = RANDOM_STATE) -
     )
     section_code = rng.choice([f"S{c:04d}" for c in range(300)], n)
 
+    # Two seller tiers: most behave like verified/professional resellers (very low
+    # historical dispute rate), a smaller share are chronically disputed. Real seller
+    # bases look like this far more than a single smooth distribution — trust & safety
+    # data consistently shows a small minority of accounts driving most disputes.
+    is_risky_seller = rng.random(n) < 0.10
+    seller_prior_dispute_rate = np.where(
+        is_risky_seller,
+        rng.beta(5, 8, n),   # risky tier: mean ~38%
+        rng.beta(1, 80, n),  # clean tier: mean ~1.2%
+    )
+
     df = pd.DataFrame(
         {
             "transaction_id": np.arange(n),
@@ -40,18 +54,29 @@ def generate_synthetic_transactions(n: int = 40_000, seed: int = RANDOM_STATE) -
             "event_category": event_category,
             "section_code": section_code,
             # Pretend these come from a leakage-safe rolling window in SQL
-            "seller_prior_dispute_rate": np.clip(rng.beta(2, 20, n), 0, 1),
+            "seller_prior_dispute_rate": np.clip(seller_prior_dispute_rate, 0, 1),
             "buyer_prior_purchases": rng.poisson(3, n),
         }
     )
 
+    price_hi = (df["ticket_price"] > df["ticket_price"].quantile(0.75)).astype(float)
+    risky_venue = df["venue_type"].isin(["festival", "club"]).astype(float)
+    dispute = df["seller_prior_dispute_rate"]
+    # Risky sellers unloading expensive tickets compound risk beyond either factor
+    # alone — the kind of interaction a linear model can't represent but trees can.
+    risky_seller_high_price = (dispute > 0.15).astype(float) * price_hi * 3.6
+    # Diminishing-returns trust effect: loyalty matters most for a buyer's first
+    # few purchases, then flattens out.
+    buyer_trust = -0.3 * np.log1p(df["buyer_prior_purchases"])
+
     logit = (
-        -4.0
-        + 6.5 * df["seller_prior_dispute_rate"]
-        + 0.9 * (df["ticket_price"] > df["ticket_price"].quantile(0.75)).astype(float)
-        + 0.8 * df["venue_type"].isin(["festival", "club"]).astype(float)
-        + 0.05 * df["buyer_prior_purchases"]
-        + rng.normal(0, 0.4, n)
+        -3.85
+        + 7.0 * dispute
+        + 0.5 * price_hi
+        + 0.5 * risky_venue
+        + risky_seller_high_price
+        + buyer_trust
+        + rng.normal(0, 0.19, n)
     )
     p = 1 / (1 + np.exp(-logit))
     df[TARGET] = (rng.random(n) < p).astype(int)

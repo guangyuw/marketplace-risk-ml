@@ -63,8 +63,15 @@ def generate_raw_tables(
     """
     rng = np.random.default_rng(seed)
 
-    # Persistent risk level per seller (heterogeneous sellers as in real markets)
-    seller_risk = rng.beta(1.5, 15, n_sellers)  # mean ~9 %, long tail
+    # Persistent risk level per seller, bimodal: most sellers behave like
+    # verified/professional resellers (very low risk), a minority are
+    # chronically disputed. Mirrors src.data.generate_synthetic_transactions.
+    is_risky_seller = rng.random(n_sellers) < 0.10
+    seller_risk = np.where(
+        is_risky_seller,
+        rng.beta(5, 8, n_sellers),   # risky tier: mean ~38 %
+        rng.beta(1, 80, n_sellers),  # clean tier: mean ~1.2 %
+    )
 
     seller_ids = rng.integers(0, n_sellers, n)
     buyer_ids = rng.integers(0, n_buyers, n)
@@ -83,13 +90,18 @@ def generate_raw_tables(
     is_disputed = rng.random(n) < per_txn_seller_risk
 
     # is_high_risk: training label — correlated with seller risk but NOT with
-    # is_disputed of this same transaction (that would be leakage)
+    # is_disputed of this same transaction (that would be leakage).
+    # Same interaction + trust structure as generate_synthetic_transactions.
+    price_hi = (ticket_price > np.quantile(ticket_price, 0.75)).astype(float)
+    risky_venue = np.isin(venue_type, ["festival", "club"]).astype(float)
+    risky_seller_high_price = (per_txn_seller_risk > 0.15).astype(float) * price_hi * 3.6
     logit = (
-        -4.0
-        + 6.5 * per_txn_seller_risk
-        + 0.9 * (ticket_price > np.quantile(ticket_price, 0.75)).astype(float)
-        + 0.8 * np.isin(venue_type, ["festival", "club"]).astype(float)
-        + rng.normal(0, 0.4, n)
+        -3.85
+        + 7.0 * per_txn_seller_risk
+        + 0.5 * price_hi
+        + 0.5 * risky_venue
+        + risky_seller_high_price
+        + rng.normal(0, 0.19, n)
     )
     p_risk = 1.0 / (1.0 + np.exp(-logit))
     is_high_risk = rng.random(n) < p_risk
