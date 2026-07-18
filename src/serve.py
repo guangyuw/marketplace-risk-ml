@@ -12,8 +12,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from src.config import MODEL_BUNDLE_PATH
+from src.explain import build_evidence
 from src.features import build_features
 from src.monitoring import route_transactions
+from src.review_assist import ReviewBrief, generate_review_brief
 
 _bundle: dict = {}
 
@@ -56,16 +58,21 @@ class PredictionResponse(BaseModel):
     model_version: str
 
 
+class ReviewAssistResponse(BaseModel):
+    risk_score: float
+    route: Literal["auto_approve", "manual_review", "audit"]
+    threshold: float
+    assist_applicable: bool
+    evidence: dict | None = None
+    brief: ReviewBrief | None = None
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/predict", response_model=PredictionResponse)
-def predict(features: TransactionFeatures) -> PredictionResponse:
-    if not _bundle:
-        raise HTTPException(status_code=503, detail="Model bundle not loaded.")
-
+def _score_row(features: "TransactionFeatures") -> tuple[pd.DataFrame, float, float, str]:
     row = pd.DataFrame(
         [
             {
@@ -78,6 +85,15 @@ def predict(features: TransactionFeatures) -> PredictionResponse:
     prob = float(_bundle["model"].predict_proba(x)[:, 1][0])
     threshold = float(_bundle["threshold"])
     route = route_transactions(np.array([prob]), threshold)[0]
+    return row, prob, threshold, route
+
+
+@app.post("/predict", response_model=PredictionResponse)
+def predict(features: TransactionFeatures) -> PredictionResponse:
+    if not _bundle:
+        raise HTTPException(status_code=503, detail="Model bundle not loaded.")
+
+    _, prob, threshold, route = _score_row(features)
 
     metadata = _bundle.get("metadata", {})
     model_version = metadata.get("run_id") or metadata.get("model_type", "unknown")
@@ -87,6 +103,42 @@ def predict(features: TransactionFeatures) -> PredictionResponse:
         route=route,
         threshold=threshold,
         model_version=model_version,
+    )
+
+
+@app.post("/review-assist", response_model=ReviewAssistResponse)
+def review_assist(features: TransactionFeatures) -> ReviewAssistResponse:
+    """Draft a structured review brief for a flagged transaction.
+
+    The scoring model decides the route; this endpoint only adds a reviewer
+    aid. It is a no-op for auto-approved transactions — assist is reserved for
+    manual_review / audit, where a human is already in the loop.
+    """
+    if not _bundle:
+        raise HTTPException(status_code=503, detail="Model bundle not loaded.")
+
+    row, prob, threshold, route = _score_row(features)
+
+    if route == "auto_approve":
+        return ReviewAssistResponse(
+            risk_score=prob,
+            route=route,
+            threshold=threshold,
+            assist_applicable=False,
+        )
+
+    evidence = build_evidence(
+        _bundle, row, risk_score=prob, threshold=threshold, route=route
+    )
+    brief = generate_review_brief(evidence)
+
+    return ReviewAssistResponse(
+        risk_score=prob,
+        route=route,
+        threshold=threshold,
+        assist_applicable=True,
+        evidence=evidence,
+        brief=brief,
     )
 
 

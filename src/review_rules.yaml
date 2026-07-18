@@ -1,0 +1,48 @@
+# Manual-review action rules.
+#
+# These encode the review playbook: which checks a human reviewer should run
+# given the transaction evidence. The LLM assist layer may ONLY recommend
+# actions whose rule fires here — it cannot invent new actions. This keeps the
+# LLM faithful to policy and makes hallucinated checks detectable in evals.
+#
+# Each condition is a boolean expression over the flattened evidence namespace
+# (see src/explain.rule_namespace): ticket_price, quantity, venue_type,
+# event_category, seller_prior_dispute_rate, buyer_prior_purchases,
+# ticket_price_percentile, seller_dispute_percentile, quantity_percentile,
+# risk_score.
+
+rules:
+  - id: high_seller_dispute
+    action: verify_seller_history
+    description: >-
+      Seller's historical dispute rate is above the trust tolerance; confirm
+      the seller's standing and ticket source before clearing.
+    condition: "seller_prior_dispute_rate >= 0.10"
+
+  - id: high_value_order
+    action: verify_ticket_and_payment
+    description: >-
+      Order value sits in the top of the price distribution; verify ticket
+      legitimacy and payment instrument.
+    condition: "ticket_price_percentile >= 95"
+
+  - id: bulk_first_purchase
+    action: review_buyer_account_and_device
+    description: >-
+      Large quantity from a buyer with no purchase history; check account age
+      and device/payment linkage for possible bulk-buying abuse.
+    condition: "quantity >= 6 and buyer_prior_purchases == 0"
+
+  - id: risky_venue
+    action: confirm_event_and_delivery_method
+    description: >-
+      Venue types with historically higher dispute exposure; confirm the event
+      and the delivery method.
+    condition: "venue_type in ['festival', 'club']"
+
+  - id: elevated_score
+    action: escalate_to_senior_reviewer
+    description: >-
+      Model risk score is very high relative to the auto-approve threshold;
+      route to a senior reviewer for a second opinion.
+    condition: "risk_score >= 0.60"

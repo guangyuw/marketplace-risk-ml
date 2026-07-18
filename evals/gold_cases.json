@@ -1,0 +1,149 @@
+{
+  "description": "Gold cases for the review-assist layer. Each case is a raw transaction plus the review actions policy should surface and facts that must/must-not appear. The harness scores schema validity, action recall, and hallucination against these expectations. Works with or without an LLM API key (without a key it scores the deterministic fallback).",
+  "cases": [
+    {
+      "id": "clean_lowrisk_1",
+      "note": "Trusted seller, cheap single ticket, experienced buyer -> should auto-approve, assist not applicable.",
+      "transaction": {"ticket_price": 85.0, "quantity": 1, "buyer_age": 41, "venue_type": "arena", "event_category": "sports", "section_code": "S0010", "seller_prior_dispute_rate": 0.01, "buyer_prior_purchases": 14, "event_date": "2025-06-01"},
+      "expect_flagged": false,
+      "expected_actions": [],
+      "forbidden_actions": ["verify_seller_history", "verify_ticket_and_payment"]
+    },
+    {
+      "id": "clean_lowrisk_2",
+      "note": "Clean seller, mid price, repeat buyer.",
+      "transaction": {"ticket_price": 140.0, "quantity": 2, "buyer_age": 36, "venue_type": "theater", "event_category": "theater", "section_code": "S0021", "seller_prior_dispute_rate": 0.02, "buyer_prior_purchases": 6, "event_date": "2025-05-10"},
+      "expect_flagged": false,
+      "expected_actions": [],
+      "forbidden_actions": ["verify_seller_history"]
+    },
+    {
+      "id": "high_seller_dispute_1",
+      "note": "Seller dispute rate well above tolerance.",
+      "transaction": {"ticket_price": 160.0, "quantity": 2, "buyer_age": 33, "venue_type": "arena", "event_category": "concert", "section_code": "S0033", "seller_prior_dispute_rate": 0.35, "buyer_prior_purchases": 5, "event_date": "2025-04-12"},
+      "expect_flagged": true,
+      "expected_actions": ["verify_seller_history"],
+      "forbidden_actions": ["review_buyer_account_and_device"]
+    },
+    {
+      "id": "high_seller_dispute_2",
+      "note": "Moderate dispute rate just over the 10% line.",
+      "transaction": {"ticket_price": 210.0, "quantity": 3, "buyer_age": 28, "venue_type": "stadium", "event_category": "sports", "section_code": "S0044", "seller_prior_dispute_rate": 0.14, "buyer_prior_purchases": 4, "event_date": "2025-03-22"},
+      "expect_flagged": true,
+      "expected_actions": ["verify_seller_history"],
+      "forbidden_actions": []
+    },
+    {
+      "id": "high_value_order_1",
+      "note": "Very expensive order from a clean seller -> value check, not seller check.",
+      "transaction": {"ticket_price": 1500.0, "quantity": 2, "buyer_age": 45, "venue_type": "arena", "event_category": "concert", "section_code": "S0007", "seller_prior_dispute_rate": 0.02, "buyer_prior_purchases": 9, "event_date": "2025-07-01"},
+      "expect_flagged": true,
+      "expected_actions": ["verify_ticket_and_payment"],
+      "forbidden_actions": ["verify_seller_history"]
+    },
+    {
+      "id": "high_value_order_2",
+      "note": "High price near the top of the distribution.",
+      "transaction": {"ticket_price": 1100.0, "quantity": 1, "buyer_age": 52, "venue_type": "theater", "event_category": "theater", "section_code": "S0088", "seller_prior_dispute_rate": 0.03, "buyer_prior_purchases": 7, "event_date": "2025-02-14"},
+      "expect_flagged": true,
+      "expected_actions": ["verify_ticket_and_payment"],
+      "forbidden_actions": []
+    },
+    {
+      "id": "bulk_first_purchase_1",
+      "note": "Large quantity from a brand-new buyer.",
+      "transaction": {"ticket_price": 130.0, "quantity": 8, "buyer_age": 24, "venue_type": "arena", "event_category": "concert", "section_code": "S0055", "seller_prior_dispute_rate": 0.03, "buyer_prior_purchases": 0, "event_date": "2025-05-30"},
+      "expect_flagged": true,
+      "expected_actions": ["review_buyer_account_and_device"],
+      "forbidden_actions": ["verify_seller_history"]
+    },
+    {
+      "id": "bulk_first_purchase_2",
+      "note": "Bulk order, no history, mid price.",
+      "transaction": {"ticket_price": 240.0, "quantity": 7, "buyer_age": 21, "venue_type": "stadium", "event_category": "sports", "section_code": "S0012", "seller_prior_dispute_rate": 0.04, "buyer_prior_purchases": 0, "event_date": "2025-06-18"},
+      "expect_flagged": true,
+      "expected_actions": ["review_buyer_account_and_device"],
+      "forbidden_actions": []
+    },
+    {
+      "id": "risky_venue_1",
+      "note": "Festival venue with otherwise clean signals.",
+      "transaction": {"ticket_price": 120.0, "quantity": 2, "buyer_age": 27, "venue_type": "festival", "event_category": "concert", "section_code": "S0100", "seller_prior_dispute_rate": 0.03, "buyer_prior_purchases": 3, "event_date": "2025-08-02"},
+      "expect_flagged": true,
+      "expected_actions": ["confirm_event_and_delivery_method"],
+      "forbidden_actions": ["review_buyer_account_and_device"]
+    },
+    {
+      "id": "risky_venue_2",
+      "note": "Club venue.",
+      "transaction": {"ticket_price": 95.0, "quantity": 2, "buyer_age": 30, "venue_type": "club", "event_category": "comedy", "section_code": "S0140", "seller_prior_dispute_rate": 0.05, "buyer_prior_purchases": 2, "event_date": "2025-04-05"},
+      "expect_flagged": true,
+      "expected_actions": ["confirm_event_and_delivery_method"],
+      "forbidden_actions": []
+    },
+    {
+      "id": "combo_dispute_highvalue_1",
+      "note": "Risky seller unloading an expensive order -> multiple checks + likely escalation.",
+      "transaction": {"ticket_price": 1400.0, "quantity": 4, "buyer_age": 26, "venue_type": "festival", "event_category": "concert", "section_code": "S0003", "seller_prior_dispute_rate": 0.42, "buyer_prior_purchases": 0, "event_date": "2025-07-20"},
+      "expect_flagged": true,
+      "expected_actions": ["verify_seller_history", "verify_ticket_and_payment", "confirm_event_and_delivery_method"],
+      "forbidden_actions": []
+    },
+    {
+      "id": "combo_bulk_dispute_1",
+      "note": "Risky seller + bulk first purchase.",
+      "transaction": {"ticket_price": 300.0, "quantity": 9, "buyer_age": 22, "venue_type": "arena", "event_category": "concert", "section_code": "S0066", "seller_prior_dispute_rate": 0.38, "buyer_prior_purchases": 0, "event_date": "2025-06-09"},
+      "expect_flagged": true,
+      "expected_actions": ["verify_seller_history", "review_buyer_account_and_device"],
+      "forbidden_actions": []
+    },
+    {
+      "id": "combo_highvalue_bulk_1",
+      "note": "Expensive bulk order from new buyer, clean seller.",
+      "transaction": {"ticket_price": 1250.0, "quantity": 6, "buyer_age": 29, "venue_type": "stadium", "event_category": "sports", "section_code": "S0077", "seller_prior_dispute_rate": 0.03, "buyer_prior_purchases": 0, "event_date": "2025-05-01"},
+      "expect_flagged": true,
+      "expected_actions": ["verify_ticket_and_payment", "review_buyer_account_and_device"],
+      "forbidden_actions": ["verify_seller_history"]
+    },
+    {
+      "id": "borderline_dispute_1",
+      "note": "Dispute rate just under threshold -> should NOT trigger seller check.",
+      "transaction": {"ticket_price": 180.0, "quantity": 2, "buyer_age": 34, "venue_type": "arena", "event_category": "concert", "section_code": "S0201", "seller_prior_dispute_rate": 0.08, "buyer_prior_purchases": 5, "event_date": "2025-03-11"},
+      "expect_flagged": false,
+      "expected_actions": [],
+      "forbidden_actions": ["verify_seller_history"]
+    },
+    {
+      "id": "borderline_quantity_1",
+      "note": "Quantity 5 (under bulk threshold of 6) with history -> no bulk check.",
+      "transaction": {"ticket_price": 160.0, "quantity": 5, "buyer_age": 38, "venue_type": "theater", "event_category": "theater", "section_code": "S0202", "seller_prior_dispute_rate": 0.04, "buyer_prior_purchases": 8, "event_date": "2025-02-20"},
+      "expect_flagged": false,
+      "expected_actions": [],
+      "forbidden_actions": ["review_buyer_account_and_device"]
+    },
+    {
+      "id": "high_value_festival_1",
+      "note": "Expensive festival ticket, clean seller.",
+      "transaction": {"ticket_price": 1300.0, "quantity": 2, "buyer_age": 31, "venue_type": "festival", "event_category": "concert", "section_code": "S0009", "seller_prior_dispute_rate": 0.02, "buyer_prior_purchases": 6, "event_date": "2025-08-15"},
+      "expect_flagged": true,
+      "expected_actions": ["verify_ticket_and_payment", "confirm_event_and_delivery_method"],
+      "forbidden_actions": ["verify_seller_history"]
+    },
+    {
+      "id": "dispute_club_1",
+      "note": "Risky seller at a club venue.",
+      "transaction": {"ticket_price": 200.0, "quantity": 2, "buyer_age": 25, "venue_type": "club", "event_category": "comedy", "section_code": "S0142", "seller_prior_dispute_rate": 0.28, "buyer_prior_purchases": 1, "event_date": "2025-04-28"},
+      "expect_flagged": true,
+      "expected_actions": ["verify_seller_history", "confirm_event_and_delivery_method"],
+      "forbidden_actions": []
+    },
+    {
+      "id": "extreme_combo_1",
+      "note": "Worst-case: very risky seller, very expensive, festival, bulk, new buyer.",
+      "transaction": {"ticket_price": 1800.0, "quantity": 10, "buyer_age": 20, "venue_type": "festival", "event_category": "concert", "section_code": "S0001", "seller_prior_dispute_rate": 0.55, "buyer_prior_purchases": 0, "event_date": "2025-09-01"},
+      "expect_flagged": true,
+      "expected_actions": ["verify_seller_history", "verify_ticket_and_payment", "review_buyer_account_and_device", "confirm_event_and_delivery_method", "escalate_to_senior_reviewer"],
+      "forbidden_actions": []
+    }
+  ]
+}

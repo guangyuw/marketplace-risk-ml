@@ -8,6 +8,11 @@ uvicorn[standard]>=0.27
 pydantic>=2.0
 joblib>=1.3
 matplotlib>=3.7
+pyyaml>=6.0
 pytest>=8.0
 snowflake-connector-python[pandas]>=3.6
 python-dotenv>=1.0
+
+# LLM review-assist layer. If OPENAI_API_KEY is unset, the layer falls back to
+# a deterministic brief, so the service and evals still run fully offline.
+openai>=1.30
