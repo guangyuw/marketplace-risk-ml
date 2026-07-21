@@ -50,7 +50,11 @@ def main() -> None:
 
     # ── 2. Simulate a batch of current transactions ───────────────────────────
     # In production: read today's transactions from the database or request log.
-    current_df = generate_synthetic_transactions(n=5_000)
+    # Use the last 20% by time to match the baseline's distributional maturity
+    # (point-in-time features stabilise as sellers accumulate history).
+    _sim = generate_synthetic_transactions(n=20_000, seed=99)
+    _sim = _sim.sort_values("event_date")
+    current_df = _sim.iloc[int(len(_sim) * 0.8):].copy()
     x_current  = build_features(current_df, freq_maps)[feature_cols]
 
     # ── 3. Score with the production model ───────────────────────────────────

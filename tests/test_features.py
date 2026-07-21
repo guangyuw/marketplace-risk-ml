@@ -26,7 +26,8 @@ def test_unseen_category_maps_to_zero():
     df = generate_synthetic_transactions(n=500)
     train, test = temporal_train_test_split(df)
     freq_maps = fit_freq_maps(train)
-    test = test.copy()
+    # Reset index so iloc and loc are aligned, then inject an unseen category.
+    test = test.reset_index(drop=True)
     test.loc[0, "section_code"] = "UNSEEN_SECTION"
     feats = build_features(test.iloc[[0]], freq_maps)
     assert feats["section_code_freq"].iloc[0] == 0.0

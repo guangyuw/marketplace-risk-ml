@@ -47,9 +47,9 @@ def generate_raw_tables(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Generate raw transactions and buyers with no pre-computed features.
 
-    Unlike generate_synthetic_transactions() in data.py (which fakes the
-    aggregated features), this produces the *raw event log* that would live in
-    a production warehouse:
+    Unlike generate_synthetic_transactions() in data.py (which computes
+    point-in-time features in pandas), this produces the *raw event log* that
+    would live in a production warehouse and lets Snowflake SQL do the aggregation:
       - Each seller has a latent risk level that governs dispute probability.
       - is_disputed is an outcome of each individual transaction.
       - is_high_risk (the label) also depends on seller risk but is NOT derived

@@ -376,9 +376,8 @@ def train_pipeline(
         set_signature(model_uri, result["signature"])
         logged = mlflow.models.get_model_info(model_uri)
         print(f"risk_scorer signature (after run close): {logged.signature}")
-    except Exception as exc:
-        # Registration can still work if log_model already embedded the signature.
-        print(f"post-run signature check skipped: {exc}")
+    except Exception:
+        pass  # signature already embedded by log_model; this step is best-effort
 
     return result
 

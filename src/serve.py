@@ -40,15 +40,15 @@ app = FastAPI(
 
 
 class TransactionFeatures(BaseModel):
-    ticket_price: float = Field(..., gt=0, examples=[185.0])
+    ticket_price: float = Field(..., gt=0, examples=[220.0])
     quantity: int = Field(..., ge=1, examples=[2])
-    buyer_age: int = Field(..., ge=18, le=100, examples=[29])
-    venue_type: str = Field(..., examples=["arena"])
+    buyer_age: int = Field(..., ge=18, le=100, examples=[28])
+    venue_type: str = Field(..., examples=["festival"])
     event_category: str = Field(..., examples=["concert"])
-    section_code: str = Field(..., examples=["S0042"])
-    seller_prior_dispute_rate: float = Field(..., ge=0, le=1, examples=[0.04])
-    buyer_prior_purchases: int = Field(..., ge=0, examples=[3])
-    event_date: str = Field(..., examples=["2025-03-15"])
+    section_code: str = Field(..., examples=["S0003"])
+    seller_prior_dispute_rate: float = Field(..., ge=0, le=1, examples=[0.0])
+    buyer_prior_purchases: int = Field(..., ge=0, examples=[2])
+    event_date: str = Field(..., examples=["2025-06-01"])
 
 
 class PredictionResponse(BaseModel):

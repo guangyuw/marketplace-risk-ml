@@ -7,18 +7,41 @@ import pandas as pd
 
 from src.config import RANDOM_STATE, TARGET, TRAIN_QUANTILE
 
-
 def generate_synthetic_transactions(n: int = 40_000, seed: int = RANDOM_STATE) -> pd.DataFrame:
     """Synthetic marketplace transactions for offline development.
 
     Schema mirrors a secondary ticket marketplace:
     - long-tail prices, high-cardinality categories, imbalanced risk label
-    - historical seller/buyer features computed only from past events (no leakage)
+    - seller entities with persistent latent risk; per-transaction is_disputed
+      outcomes are aggregated point-in-time to produce seller_prior_dispute_rate
+      (strictly past rows only — no leakage)
     - bimodal seller quality (verified-style low-risk sellers vs. a risky minority)
       plus a price x seller-risk interaction, matching how risk actually concentrates
       in resale marketplaces rather than varying smoothly across all sellers
     """
     rng = np.random.default_rng(seed)
+
+    # Scale seller/buyer pool with n so each seller keeps ~20 transactions on
+    # average. This ensures the point-in-time dispute rate has enough history
+    # regardless of whether n is 5k (monitoring demo) or 40k (training).
+    n_sellers = max(50, n // 20)
+    n_buyers  = max(200, n // 4)
+
+    # ── Seller entities: bimodal latent risk ─────────────────────────────────
+    # Most sellers behave like verified/professional resellers (very low dispute
+    # rate); a small minority are chronically high-risk. Real trust-and-safety
+    # data shows a small fraction of accounts driving the majority of disputes.
+    is_risky_seller = rng.random(n_sellers) < 0.10
+    seller_latent_risk = np.where(
+        is_risky_seller,
+        rng.beta(5, 8, n_sellers),   # risky tier: mean ~38%
+        rng.beta(1, 80, n_sellers),  # clean tier: mean ~1.2%
+    )
+
+    # ── Assign sellers and buyers to transactions ─────────────────────────────
+    seller_ids = rng.integers(0, n_sellers, n)
+    buyer_ids = rng.integers(0, n_buyers, n)
+    per_txn_seller_risk = seller_latent_risk[seller_ids]
 
     venue_type = rng.choice(
         ["arena", "stadium", "theater", "club", "festival"],
@@ -31,47 +54,65 @@ def generate_synthetic_transactions(n: int = 40_000, seed: int = RANDOM_STATE) -
     )
     section_code = rng.choice([f"S{c:04d}" for c in range(300)], n)
 
-    # Two seller tiers: most behave like verified/professional resellers (very low
-    # historical dispute rate), a smaller share are chronically disputed. Real seller
-    # bases look like this far more than a single smooth distribution — trust & safety
-    # data consistently shows a small minority of accounts driving most disputes.
-    is_risky_seller = rng.random(n) < 0.10
-    seller_prior_dispute_rate = np.where(
-        is_risky_seller,
-        rng.beta(5, 8, n),   # risky tier: mean ~38%
-        rng.beta(1, 80, n),  # clean tier: mean ~1.2%
+    event_date = pd.to_datetime("2024-01-01") + pd.to_timedelta(
+        rng.integers(0, 540, n), unit="D"
     )
+
+    # ── Per-transaction dispute outcome ───────────────────────────────────────
+    # is_disputed is the raw 0/1 event recorded after each transaction settles.
+    # It is used only to compute the historical prior — NOT as a feature itself
+    # (that would leak the current transaction's outcome into the model).
+    is_disputed = (rng.random(n) < per_txn_seller_risk).astype(int)
 
     df = pd.DataFrame(
         {
             "transaction_id": np.arange(n),
-            "event_date": pd.to_datetime("2024-01-01")
-            + pd.to_timedelta(rng.integers(0, 540, n), unit="D"),
+            "seller_id": seller_ids,
+            "buyer_id": buyer_ids,
+            "event_date": event_date,
             "ticket_price": np.round(rng.lognormal(mean=4.5, sigma=0.9, size=n), 2),
             "quantity": rng.poisson(2, n) + 1,
             "buyer_age": np.clip(rng.normal(34, 11, n), 18, 75).astype(int),
             "venue_type": venue_type,
             "event_category": event_category,
             "section_code": section_code,
-            # Pretend these come from a leakage-safe rolling window in SQL
-            "seller_prior_dispute_rate": np.clip(seller_prior_dispute_rate, 0, 1),
-            "buyer_prior_purchases": rng.poisson(3, n),
+            "is_disputed": is_disputed,
         }
     )
 
-    price_hi = (df["ticket_price"] > df["ticket_price"].quantile(0.75)).astype(float)
-    risky_venue = df["venue_type"].isin(["festival", "club"]).astype(float)
-    dispute = df["seller_prior_dispute_rate"]
+    # ── Point-in-time seller prior dispute rate ───────────────────────────────
+    # Sort by date so past rows always come before current. For each transaction,
+    # compute the seller's dispute rate using only strictly prior transactions
+    # (expanding mean shifted by 1). Sellers with no history get NaN → filled
+    # downstream in features.py with an is_missing indicator.
+    df = df.sort_values("event_date").reset_index(drop=True)
+    df["seller_prior_dispute_rate"] = (
+        df.groupby("seller_id")["is_disputed"]
+        .transform(lambda s: s.shift(1).expanding().mean())
+    )
+
+    # ── Point-in-time buyer prior purchases ──────────────────────────────────
+    df["buyer_prior_purchases"] = (
+        df.groupby("buyer_id")["transaction_id"]
+        .transform(lambda s: (s.expanding().count() - 1).astype(int))
+    )
+
+    # ── Risk label ────────────────────────────────────────────────────────────
+    # Derived from seller latent risk (not from is_disputed of THIS transaction).
+    # Look up latent risk via seller_id so the mapping survives the sort above.
     # Risky sellers unloading expensive tickets compound risk beyond either factor
     # alone — the kind of interaction a linear model can't represent but trees can.
-    risky_seller_high_price = (dispute > 0.15).astype(float) * price_hi * 3.6
+    seller_risk_col = df["seller_id"].map(pd.Series(seller_latent_risk)).values
+    price_hi = (df["ticket_price"] > df["ticket_price"].quantile(0.75)).astype(float)
+    risky_venue = df["venue_type"].isin(["festival", "club"]).astype(float)
+    risky_seller_high_price = (seller_risk_col > 0.15).astype(float) * price_hi * 3.6
     # Diminishing-returns trust effect: loyalty matters most for a buyer's first
     # few purchases, then flattens out.
-    buyer_trust = -0.3 * np.log1p(df["buyer_prior_purchases"])
+    buyer_trust = -0.3 * np.log1p(df["buyer_prior_purchases"].fillna(0))
 
     logit = (
         -3.85
-        + 7.0 * dispute
+        + 7.0 * seller_risk_col
         + 0.5 * price_hi
         + 0.5 * risky_venue
         + risky_seller_high_price

@@ -12,7 +12,7 @@ TARGET = "is_high_risk"
 TRAIN_QUANTILE = 0.8
 
 # Business decision: auto-approve when risk probability < threshold
-FALSE_CLEAR_TOLERANCE = 0.02
+FALSE_CLEAR_TOLERANCE = 0.03
 AUDIT_FRACTION = 0.02
 
 # Cost-sensitive routing (optional threshold selection)
